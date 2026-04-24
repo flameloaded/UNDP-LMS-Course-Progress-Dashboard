@@ -225,10 +225,8 @@ at_risk_learners = learner_summary_filtered["at_risk"].sum()
 
 course_completion_rate = learner_summary_filtered["course_completed"].mean() * 100
 avg_engagement_score = learner_summary_filtered["engagement_score"].mean() * 100
-avg_quiz_score = learner_summary_filtered.loc[
-    learner_summary_filtered["avg_score"] > 0,
-    "avg_score"
-].mean()
+avg_quiz_score = learner_summary_filtered["avg_score"].mean()
+
 
 col1, col2, col3 = st.columns(3)
 
