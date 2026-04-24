@@ -15,11 +15,41 @@ st.set_page_config(
 # LOAD DATA
 # =========================
 
-@st.cache_data
-def load_data():
-    return pd.read_csv("undp_lms_dataset.csv")
+# =========================
+# LOAD DATA WITH CACHE/FALLBACK
+# =========================
 
-final_table = load_data()
+DATA_PATH = "data/undp_lms_dataset.csv"
+BACKUP_PATH = "data/undp_lms_dataset_backup.csv"
+
+@st.cache_data(ttl=600)
+def load_data():
+    try:
+        df = pd.read_csv(DATA_PATH)
+
+        # save backup copy after successful load
+        df.to_csv(BACKUP_PATH, index=False)
+
+        return df, "latest"
+
+    except Exception as e:
+        try:
+            df = pd.read_csv(BACKUP_PATH)
+            return df, "backup"
+        except Exception:
+            return pd.DataFrame(), "failed"
+
+
+final_table, data_status = load_data()
+
+if data_status == "backup":
+    st.warning("⚠️ Latest data failed to load. Showing backup cached data.")
+
+elif data_status == "failed":
+    st.error("❌ No data available. Latest and backup files failed.")
+    st.stop()
+
+    
 
 # =========================
 # REQUIRED COLUMNS
