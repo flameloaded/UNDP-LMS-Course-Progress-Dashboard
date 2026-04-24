@@ -85,9 +85,35 @@ final_table["learning_effectiveness"] = (
 def wrap_label(text, width=15):
     return "<br>".join(textwrap.wrap(str(text), width=width))
 
-def build_learner_summary(df):
+def build_overall_learner_summary(df):
     learner_df = (
         df.groupby("user_id")
+        .agg(
+            weeks_completed=("completed", "sum"),
+            quizzes_attempted=("attempted_quizzes", "sum"),
+            course_completed=("course_completed", "max"),
+            avg_score=("avg_score", "mean"),
+            engagement_score=("engagement_score", "mean")
+        )
+        .reset_index()
+    )
+
+    learner_df["is_active"] = (
+        (learner_df["weeks_completed"] > 0) |
+        (learner_df["quizzes_attempted"] > 0)
+    ).astype(int)
+
+    learner_df["at_risk"] = (
+        (learner_df["weeks_completed"] == 0) &
+        (learner_df["quizzes_attempted"] == 0)
+    ).astype(int)
+
+    return learner_df
+
+
+def build_course_learner_summary(df):
+    learner_df = (
+        df.groupby(["course_id", "course_name", "user_id"])
         .agg(
             weeks_completed=("completed", "sum"),
             quizzes_attempted=("attempted_quizzes", "sum"),
@@ -143,7 +169,7 @@ learner_status = st.sidebar.selectbox(
     options=["All Learners", "Active Learners", "At-Risk Learners"]
 )
 
-learner_filter_df = build_learner_summary(filtered_df)
+learner_filter_df = build_overall_learner_summary(filtered_df)
 
 if learner_status == "Active Learners":
     active_ids = learner_filter_df.loc[
@@ -191,7 +217,7 @@ st.caption("Dashboard showing learner engagement, weekly completion, quiz perfor
 # KPI CARDS
 # =========================
 
-learner_summary_filtered = build_learner_summary(filtered_df)
+learner_summary_filtered = build_overall_learner_summary(filtered_df)
 
 total_learners = learner_summary_filtered["user_id"].nunique()
 active_learners = learner_summary_filtered["is_active"].sum()
@@ -300,7 +326,7 @@ st.plotly_chart(fig_weekly_completion, use_container_width=True)
 # =========================
 
 active_by_course = (
-    build_learner_summary(filtered_df)
+    build_course_learner_summary(filtered_df)
     .groupby("course_name")
     .agg(
         total_learners=("user_id", "nunique"),
@@ -344,7 +370,7 @@ st.plotly_chart(fig_active, use_container_width=True)
 # =========================
 
 risk_by_course = (
-    build_learner_summary(filtered_df)
+    build_course_learner_summary(filtered_df)
     .groupby("course_name")
     .agg(
         at_risk_learners=("at_risk", "sum")
@@ -416,7 +442,7 @@ st.plotly_chart(fig_score, use_container_width=True)
 # =========================
 
 engagement_by_course = (
-    build_learner_summary(filtered_df)
+    build_course_learner_summary(filtered_df)
     .groupby("course_name")
     .agg(
         avg_engagement_score=("engagement_score", "mean")
