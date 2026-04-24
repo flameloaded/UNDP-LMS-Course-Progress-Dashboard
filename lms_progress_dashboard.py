@@ -225,7 +225,18 @@ at_risk_learners = learner_summary_filtered["at_risk"].sum()
 
 course_completion_rate = learner_summary_filtered["course_completed"].mean() * 100
 avg_engagement_score = learner_summary_filtered["engagement_score"].mean() * 100
-avg_quiz_score = learner_summary_filtered["avg_score"].mean()
+
+attempted_rows = filtered_df[
+    filtered_df["attempted_quizzes"] > 0
+]
+
+if not attempted_rows.empty:
+    avg_quiz_score = (
+        (attempted_rows["avg_score"] * attempted_rows["attempted_quizzes"]).sum()
+        / attempted_rows["attempted_quizzes"].sum()
+    )
+else:
+    avg_quiz_score = 0
 
 
 col1, col2, col3 = st.columns(3)
