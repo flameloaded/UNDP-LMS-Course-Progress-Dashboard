@@ -92,7 +92,7 @@ def build_overall_learner_summary(df):
             weeks_completed=("completed", "sum"),
             quizzes_attempted=("attempted_quizzes", "sum"),
             course_completed=("course_completed", "max"),
-            avg_score=("avg_score", "mean"),
+            avg_score=("avg_score", lambda x: x[x > 0].mean()),
             engagement_score=("engagement_score", "mean")
         )
         .reset_index()
