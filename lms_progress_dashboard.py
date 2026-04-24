@@ -41,6 +41,10 @@ if missing_cols:
     st.error(f"Missing columns: {missing_cols}")
     st.stop()
 
+# =========================
+# CLEAN DATA
+# =========================
+
 final_table["completed"] = final_table["completed"].fillna(0).astype(int)
 final_table["course_completed"] = final_table["course_completed"].fillna(0).astype(int)
 final_table["total_quizzes"] = final_table["total_quizzes"].fillna(0)
@@ -49,7 +53,7 @@ final_table["avg_score"] = final_table["avg_score"].fillna(0)
 final_table["week_number"] = pd.to_numeric(final_table["week_number"], errors="coerce")
 
 # =========================
-# KPI COLUMNS
+# ROW-LEVEL KPI COLUMNS
 # =========================
 
 final_table["quiz_attempt_rate"] = np.where(
@@ -58,12 +62,12 @@ final_table["quiz_attempt_rate"] = np.where(
     0
 )
 
-final_table["is_active"] = (
+final_table["week_active"] = (
     (final_table["completed"] == 1) |
     (final_table["attempted_quizzes"] > 0)
 ).astype(int)
 
-final_table["at_risk"] = (
+final_table["week_at_risk"] = (
     (final_table["completed"] == 0) &
     (final_table["attempted_quizzes"] == 0)
 ).astype(int)
@@ -77,6 +81,33 @@ final_table["engagement_score"] = (
 final_table["learning_effectiveness"] = (
     final_table["completed"] * (final_table["avg_score"] / 100)
 )
+
+# =========================
+# LEARNER-LEVEL KPI TABLE
+# =========================
+
+learner_summary = (
+    final_table
+    .groupby(["course_id", "course_name", "user_id"])
+    .agg(
+        weeks_completed=("completed", "sum"),
+        quizzes_attempted=("attempted_quizzes", "sum"),
+        course_completed=("course_completed", "max"),
+        avg_score=("avg_score", "mean"),
+        engagement_score=("engagement_score", "mean")
+    )
+    .reset_index()
+)
+
+learner_summary["is_active"] = (
+    (learner_summary["weeks_completed"] > 0) |
+    (learner_summary["quizzes_attempted"] > 0)
+).astype(int)
+
+learner_summary["at_risk"] = (
+    (learner_summary["weeks_completed"] == 0) &
+    (learner_summary["quizzes_attempted"] == 0)
+).astype(int)
 
 # =========================
 # SIDEBAR FILTERS
