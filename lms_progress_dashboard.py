@@ -87,7 +87,7 @@ def wrap_label(text, width=15):
 
 def build_learner_summary(df):
     learner_df = (
-        df.groupby(["course_id", "course_name", "user_id"])
+        df.groupby("user_id")
         .agg(
             weeks_completed=("completed", "sum"),
             quizzes_attempted=("attempted_quizzes", "sum"),
