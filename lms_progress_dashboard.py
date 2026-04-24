@@ -1,401 +1,556 @@
+# app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="LMS Course Progress Dashboard", layout="wide")
+import textwrap
 
-# =========================
-# CONFIG
-# =========================
-CSV_PATH = "dashboard_dataset.csv"
-PASS_MARK = 50
-AT_RISK_THRESHOLD = 40
+
+
+st.set_page_config(
+    page_title="NJFP LMS Learning Analytics Dashboard",
+    layout="wide"
+)
 
 # =========================
 # LOAD DATA
 # =========================
+
 @st.cache_data
-
-def load_data(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-
-    # Standardize column names lightly
-    df.columns = [c.strip() for c in df.columns]
-
-    text_cols = [
-        "course_name", "fullname", "email", "section_name",
-        "week_name", "week_label", "status"
-    ]
-    for col in text_cols:
-        if col in df.columns:
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.strip()
-                .replace({"nan": pd.NA, "None": pd.NA, "": pd.NA})
-            )
-
-    numeric_cols = [
-        "course_id", "user_id", "cmid", "completed", "week_order",
-        "course_completed", "avg_score", "best_score"
-    ]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    # Standardize binary fields
-    if "completed" in df.columns:
-        df["completed"] = df["completed"].fillna(0).astype(int)
-    if "course_completed" in df.columns:
-        df["course_completed"] = df["course_completed"].fillna(0).astype(int)
-
-    # Standardize score/status fields
-    if "best_score" in df.columns:
-        df["best_score"] = df["best_score"].round(2)
-    if "avg_score" in df.columns:
-        df["avg_score"] = df["avg_score"].round(2)
-
-    if "status" in df.columns:
-        df["status"] = (
-            df["status"]
-            .astype(str)
-            .str.strip()
-            .str.title()
-            .replace({"Nan": pd.NA})
-        )
-
-    # Week sorting fallback
-    if "week_order" in df.columns:
-        df["week_order"] = pd.to_numeric(df["week_order"], errors="coerce")
-
-    if "week_label" not in df.columns and "week_name" in df.columns:
-        df["week_label"] = df["week_name"]
-
+def load_data():
+    df = pd.read_csv("undp_lms_dataset.csv")
     return df
 
+final_table = load_data()
 
-raw_df = load_data(CSV_PATH)
+# =========================
+# CLEAN DATA
+# =========================
 
-# One row per learner per course for learner-level KPIs
-learner_df = (
-    raw_df.groupby(["course_id", "course_name", "user_id", "fullname", "email"], dropna=False)
-    .agg(
-        total_weeks=("week_label", "nunique"),
-        weeks_completed=("completed", "sum"),
-        course_completed=("course_completed", "max"),
-        avg_score=("avg_score", "max"),
-        best_score=("best_score", "max"),
-        status=("status", "max"),
-    )
-    .reset_index()
+required_cols = [
+    "course_id", "course_name", "user_id", "fullname", "email",
+    "section_name", "week_name", "week_number", "cmid", "completed",
+    "total_quizzes", "attempted_quizzes", "avg_score", "course_completed"
+]
+
+missing_cols = [col for col in required_cols if col not in final_table.columns]
+
+if missing_cols:
+    st.error(f"Missing columns: {missing_cols}")
+    st.stop()
+
+final_table["completed"] = final_table["completed"].fillna(0).astype(int)
+final_table["course_completed"] = final_table["course_completed"].fillna(0).astype(int)
+final_table["total_quizzes"] = final_table["total_quizzes"].fillna(0)
+final_table["attempted_quizzes"] = final_table["attempted_quizzes"].fillna(0)
+final_table["avg_score"] = final_table["avg_score"].fillna(0)
+final_table["week_number"] = pd.to_numeric(final_table["week_number"], errors="coerce")
+
+# =========================
+# KPI COLUMNS
+# =========================
+
+final_table["quiz_attempt_rate"] = np.where(
+    final_table["total_quizzes"] > 0,
+    final_table["attempted_quizzes"] / final_table["total_quizzes"],
+    0
 )
 
-learner_df["progress_pct"] = np.where(
-    learner_df["total_weeks"] > 0,
-    (learner_df["weeks_completed"] / learner_df["total_weeks"]) * 100,
-    0,
+final_table["is_active"] = (
+    (final_table["completed"] == 1) |
+    (final_table["attempted_quizzes"] > 0)
+).astype(int)
+
+final_table["at_risk"] = (
+    (final_table["completed"] == 0) &
+    (final_table["attempted_quizzes"] == 0)
+).astype(int)
+
+final_table["engagement_score"] = (
+    (final_table["completed"] * 0.4) +
+    ((final_table["attempted_quizzes"] > 0).astype(int) * 0.3) +
+    ((final_table["avg_score"] / 100) * 0.3)
 )
-learner_df["is_active"] = learner_df["weeks_completed"] > 0
-learner_df["at_risk"] = learner_df["best_score"].fillna(-1) < AT_RISK_THRESHOLD
-learner_df["at_risk"] = learner_df["at_risk"] & learner_df["best_score"].notna()
 
-
-def safe_options(data: pd.DataFrame, col: str):
-    if col not in data.columns:
-        return ["All"]
-    vals = data[col].dropna().astype(str).str.strip().unique().tolist()
-    vals = sorted([v for v in vals if v])
-    return ["All"] + vals
-
+final_table["learning_effectiveness"] = (
+    final_table["completed"] * (final_table["avg_score"] / 100)
+)
 
 # =========================
 # SIDEBAR FILTERS
 # =========================
-st.sidebar.header("Filter Dashboard")
 
-course_options = safe_options(raw_df, "course_name")
-selected_course = st.sidebar.selectbox("Course", course_options)
+st.sidebar.title("Filters")
 
-course_filtered = raw_df.copy()
-if selected_course != "All":
-    course_filtered = course_filtered[course_filtered["course_name"] == selected_course]
+course_options = ["All Courses"] + sorted(final_table["course_name"].dropna().unique())
 
-week_options = ["All"]
-if "week_label" in course_filtered.columns:
-    week_table = (
-        course_filtered[["week_label", "week_order"]]
-        .drop_duplicates()
-        .sort_values(["week_order", "week_label"], na_position="last")
-    )
-    week_options += week_table["week_label"].dropna().tolist()
-selected_week = st.sidebar.selectbox("Week", week_options)
+selected_course = st.sidebar.selectbox(
+    "Select Course",
+    options=course_options
+)
 
-status_options = safe_options(course_filtered, "status")
-selected_status = st.sidebar.selectbox("Quiz Status", status_options)
+if selected_course == "All Courses":
+    filtered_df = final_table.copy()
+else:
+    filtered_df = final_table[final_table["course_name"] == selected_course].copy()
 
-completion_options = ["All", "Completed Course", "Not Completed Course"]
-selected_completion = st.sidebar.selectbox("Course Completion", completion_options)
 
-activity_options = ["All", "Active Learners", "Inactive Learners"]
-selected_activity = st.sidebar.selectbox("Learner Activity", activity_options)
+# Week filter
+week_options = ["All Weeks"] + sorted(filtered_df["week_number"].dropna().unique())
 
-# =========================
-# APPLY FILTERS
-# =========================
-filtered_raw = raw_df.copy()
-filtered_learners = learner_df.copy()
+selected_week = st.sidebar.selectbox(
+    "Select Week",
+    options=week_options
+)
 
-if selected_course != "All":
-    filtered_raw = filtered_raw[filtered_raw["course_name"] == selected_course]
-    filtered_learners = filtered_learners[filtered_learners["course_name"] == selected_course]
+if selected_week != "All Weeks":
+    filtered_df = filtered_df[filtered_df["week_number"] == selected_week].copy()
 
-if selected_status != "All":
-    filtered_raw = filtered_raw[filtered_raw["status"] == selected_status]
-    filtered_learners = filtered_learners[filtered_learners["status"] == selected_status]
 
-if selected_completion == "Completed Course":
-    filtered_raw = filtered_raw[filtered_raw["course_completed"] == 1]
-    filtered_learners = filtered_learners[filtered_learners["course_completed"] == 1]
-elif selected_completion == "Not Completed Course":
-    filtered_raw = filtered_raw[filtered_raw["course_completed"] == 0]
-    filtered_learners = filtered_learners[filtered_learners["course_completed"] == 0]
+# Learner status filter
+learner_status = st.sidebar.selectbox(
+    "Learner Status",
+    options=["All Learners", "Active Learners", "At-Risk Learners"]
+)
 
-if selected_activity == "Active Learners":
-    filtered_learners = filtered_learners[filtered_learners["is_active"]]
-    filtered_raw = filtered_raw.merge(
-        filtered_learners[["course_id", "user_id"]],
-        on=["course_id", "user_id"],
-        how="inner"
-    )
-elif selected_activity == "Inactive Learners":
-    filtered_learners = filtered_learners[~filtered_learners["is_active"]]
-    filtered_raw = filtered_raw.merge(
-        filtered_learners[["course_id", "user_id"]],
-        on=["course_id", "user_id"],
-        how="inner"
-    )
+if learner_status == "Active Learners":
+    filtered_df = filtered_df[filtered_df["is_active"] == 1].copy()
 
-if selected_week != "All":
-    filtered_raw = filtered_raw[filtered_raw["week_label"] == selected_week]
+elif learner_status == "At-Risk Learners":
+    filtered_df = filtered_df[filtered_df["at_risk"] == 1].copy()
+
+
+# Course completion filter
+completion_status = st.sidebar.selectbox(
+    "Course Completion Status",
+    options=["All", "Completed", "Not Completed"]
+)
+
+if completion_status == "Completed":
+    filtered_df = filtered_df[filtered_df["course_completed"] == 1].copy()
+
+elif completion_status == "Not Completed":
+    filtered_df = filtered_df[filtered_df["course_completed"] == 0].copy()
+
+
+# Learner search
+search_text = st.sidebar.text_input("Search Learner Name or Email")
+
+if search_text:
+    filtered_df = filtered_df[
+        filtered_df["fullname"].str.contains(search_text, case=False, na=False) |
+        filtered_df["email"].str.contains(search_text, case=False, na=False)
+    ].copy()
+
+
+if filtered_df.empty:
+    st.warning("No data available for selected filters.")
+    st.stop()
 
 # =========================
 # TITLE
 # =========================
-st.title("LMS Course Progress Dashboard")
-st.markdown("Track course completion, weekly engagement, quiz performance, and at-risk learners.")
+
+st.title("NJFP LMS Learning Analytics Dashboard")
+st.caption("Dashboard showing learner engagement, weekly completion, quiz performance, and at-risk learners.")
 
 # =========================
-# KPI SECTION
+# KPI CARDS
 # =========================
-total_learners = filtered_learners["user_id"].nunique()
-completed_courses = int(filtered_learners["course_completed"].sum()) if not filtered_learners.empty else 0
-completion_rate = (completed_courses / total_learners * 100) if total_learners else 0
-active_learners = int(filtered_learners["is_active"].sum()) if not filtered_learners.empty else 0
-avg_progress = filtered_learners["progress_pct"].mean() if not filtered_learners.empty else 0
 
-attempted_scores = filtered_learners[filtered_learners["best_score"].notna()].copy()
-pass_count = int((attempted_scores["best_score"] >= PASS_MARK).sum()) if not attempted_scores.empty else 0
-pass_rate = (pass_count / len(attempted_scores) * 100) if len(attempted_scores) else 0
-avg_score = attempted_scores["best_score"].mean() if not attempted_scores.empty else 0
-at_risk_count = int(filtered_learners["at_risk"].sum()) if not filtered_learners.empty else 0
+total_learners = filtered_df["user_id"].nunique()
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Learners", f"{total_learners:,}")
-c2.metric("Course Completion Rate", f"{completion_rate:.1f}%")
-c3.metric("Active Learners", f"{active_learners:,}")
-c4.metric("Average Progress", f"{avg_progress:.1f}%")
+active_learners = filtered_df.loc[
+    filtered_df["is_active"] == 1, "user_id"
+].nunique()
 
-c5, c6, c7, c8 = st.columns(4)
-c5.metric("Pass Rate", f"{pass_rate:.1f}%")
-c6.metric("Average Best Score", f"{avg_score:.1f}%")
-c7.metric("At-Risk Learners", f"{at_risk_count:,}")
-c8.metric("Students Attempted Quiz", f"{len(attempted_scores):,}")
+at_risk_learners = filtered_df.loc[
+    filtered_df["at_risk"] == 1, "user_id"
+].nunique()
+
+course_completion_rate = (
+    filtered_df.groupby("user_id")["course_completed"].max().mean() * 100
+)
+
+avg_engagement_score = filtered_df["engagement_score"].mean() * 100
+
+avg_quiz_score = filtered_df["avg_score"].replace(0, np.nan).mean()
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric("Total Learners", f"{total_learners:,}")
+col2.metric("Active Learners", f"{active_learners:,}")
+col3.metric("At-Risk Learners", f"{at_risk_learners:,}")
+
+col4, col5, col6 = st.columns(3)
+
+col4.metric("Course Completion Rate", f"{course_completion_rate:.1f}%")
+col5.metric("Avg Engagement Score", f"{avg_engagement_score:.1f}%")
+col6.metric("Avg Quiz Score", f"{avg_quiz_score:.1f}%" if not np.isnan(avg_quiz_score) else "0.0%")
+
+st.divider()
 
 # =========================
-# WEEKLY COMPLETION TREND
+# TOTAL USERS BY COURSE
 # =========================
-st.subheader("Weekly Completion Rate")
 
-if not filtered_raw.empty:
-    weekly_completion = (
-        filtered_raw.groupby(["week_order", "week_label"], dropna=False)
-        .agg(
-            total_learners=("user_id", "nunique"),
-            learners_completed=("completed", "sum")
-        )
-        .reset_index()
-        .sort_values(["week_order", "week_label"], na_position="last")
+total_users_by_course = (
+    filtered_df
+    .groupby("course_name")
+    .agg(total_users=("user_id", "nunique"))
+    .reset_index()
+    .sort_values("total_users", ascending=False)
+)
+
+import textwrap
+
+total_users_by_course["course_name_wrapped"] = total_users_by_course["course_name"].apply(
+    lambda x: "<br>".join(textwrap.wrap(x, width=15))
+)
+
+fig_total_users = px.bar(
+    total_users_by_course,
+    x="course_name_wrapped",
+    y="total_users",
+    title="Total Users by Course",
+    text="total_users",
+    labels={
+        "course_name_wrapped": "Course",
+        "total_users": "Total Users"
+    }
+)
+
+fig_total_users.update_traces(
+    textposition="outside"
+)
+
+fig_total_users.update_layout(
+    xaxis_tickangle=0,
+    margin=dict(t=60, b=120),
+    yaxis_title="Total Users",
+    xaxis_title="Course"
+)
+
+st.plotly_chart(fig_total_users, use_container_width=True)
+
+# =========================
+# WEEKLY COMPLETION RATE
+# =========================
+
+weekly_completion = (
+    filtered_df
+    .groupby(["course_name", "week_number"])
+    .agg(
+        total_users=("user_id", "nunique"),
+        completed_users=("completed", "sum")
     )
-    weekly_completion["weekly_completion_rate_pct"] = np.where(
-        weekly_completion["total_learners"] > 0,
-        (weekly_completion["learners_completed"] / weekly_completion["total_learners"]) * 100,
-        0,
-    )
+    .reset_index()
+)
 
-    fig_weekly = px.line(
-        weekly_completion,
-        x="week_label",
-        y="weekly_completion_rate_pct",
-        markers=True,
-        title="Weekly Completion Rate (%)"
-    )
-    fig_weekly.update_layout(yaxis_title="Completion Rate (%)", xaxis_title="Week")
-    st.plotly_chart(fig_weekly, use_container_width=True)
-    st.dataframe(weekly_completion, use_container_width=True, hide_index=True)
-else:
-    st.info("No weekly data available for the selected filters.")
+weekly_completion["completion_rate"] = (
+    weekly_completion["completed_users"] /
+    weekly_completion["total_users"] * 100
+)
 
-# =========================
-# DROPOFF RATE
-# =========================
-st.subheader("Weekly Drop-off")
+fig_weekly_completion = px.line(
+    weekly_completion,
+    x="week_number",
+    y="completion_rate",
+    color="course_name",
+    markers=True,
+    title="Weekly Completion Rate by Course",
+    labels={
+        "week_number": "Week",
+        "completion_rate": "Completion Rate (%)",
+        "course_name": "Course"
+    }
+)
 
-if not filtered_raw.empty:
-    dropoff_df = weekly_completion.copy()
-    dropoff_df["prev_week_completion_rate_pct"] = dropoff_df["weekly_completion_rate_pct"].shift(1)
-    dropoff_df["dropoff_pct"] = (
-        dropoff_df["prev_week_completion_rate_pct"] - dropoff_df["weekly_completion_rate_pct"]
-    ).round(1)
+fig_weekly_completion.update_layout(
+    xaxis=dict(dtick=1),
+    yaxis=dict(range=[0, 100])
+)
 
-    fig_dropoff = px.bar(
-        dropoff_df,
-        x="week_label",
-        y="dropoff_pct",
-        title="Drop-off from Previous Week (%)",
-        text="dropoff_pct"
-    )
-    fig_dropoff.update_traces(textposition="outside")
-    fig_dropoff.update_layout(yaxis_title="Drop-off (%)", xaxis_title="Week")
-    st.plotly_chart(fig_dropoff, use_container_width=True)
-    st.dataframe(dropoff_df, use_container_width=True, hide_index=True)
-else:
-    st.info("No drop-off data available for the selected filters.")
+st.plotly_chart(fig_weekly_completion, use_container_width=True)
 
 # =========================
-# QUIZ PERFORMANCE
+# ACTIVE USERS BY COURSE
 # =========================
-st.subheader("Quiz Performance")
-col_left, col_right = st.columns(2)
 
-with col_left:
-    if not attempted_scores.empty:
-        fig_score = px.histogram(
-            attempted_scores,
-            x="best_score",
-            nbins=20,
-            title="Best Score Distribution"
-        )
-        fig_score.update_layout(xaxis_title="Best Score (%)", yaxis_title="Learners")
-        st.plotly_chart(fig_score, use_container_width=True)
-    else:
-        st.info("No quiz score data available for the selected filters.")
-
-with col_right:
-    status_df = (
-        filtered_learners["status"]
-        .fillna("No Status")
-        .value_counts()
-        .rename_axis("status")
-        .reset_index(name="count")
+active_by_course = (
+    filtered_df
+    .groupby("course_name")
+    .agg(
+        total_learners=("user_id", "nunique"),
+        active_learners=("is_active", lambda x: filtered_df.loc[x.index][filtered_df.loc[x.index, "is_active"] == 1]["user_id"].nunique())
     )
-    if not status_df.empty:
-        fig_status = px.pie(
-            status_df,
-            names="status",
-            values="count",
-            hole=0.4,
-            title="Quiz Status Split"
-        )
-        st.plotly_chart(fig_status, use_container_width=True)
-    else:
-        st.info("No status data available for the selected filters.")
+    .reset_index()
+)
+
+active_by_course["active_rate"] = (
+    active_by_course["active_learners"] /
+    active_by_course["total_learners"] * 100
+)
+
+
+active_by_course["course_name_wrapped"] = active_by_course["course_name"].apply(
+    lambda x: "<br>".join(textwrap.wrap(x, width=15))
+)
+
+fig_active = px.bar(
+    active_by_course,
+    x="course_name_wrapped",
+    y="active_rate",
+    title="Active Learner Rate by Course",
+    labels={
+        "course_name_wrapped": "Course",
+        "active_rate": "Active Learner Rate (%)"
+    }
+)
+
+st.plotly_chart(fig_active, use_container_width=True)
 
 # =========================
-# PROGRESS BANDS
+# AT-RISK LEARNERS BY COURSE
 # =========================
-st.subheader("Learner Progress Bands")
 
-if not filtered_learners.empty:
-    band_df = filtered_learners.copy()
-    band_df["progress_band"] = pd.cut(
-        band_df["progress_pct"],
-        bins=[-0.1, 0, 25, 50, 75, 100],
-        labels=["0%", "1–25%", "26–50%", "51–75%", "76–100%"]
+risk_by_course = (
+    filtered_df[filtered_df["at_risk"] == 1]
+    .groupby("course_name")
+    .agg(
+        at_risk_learners=("user_id", "nunique")
     )
-    band_summary = (
-        band_df["progress_band"]
-        .value_counts(dropna=False)
-        .rename_axis("progress_band")
-        .reset_index(name="learners")
-    )
-    fig_band = px.bar(
-        band_summary,
-        x="progress_band",
-        y="learners",
-        text="learners",
-        title="Learners by Progress Band"
-    )
-    fig_band.update_traces(textposition="outside")
-    st.plotly_chart(fig_band, use_container_width=True)
-else:
-    st.info("No learner progress data available for the selected filters.")
+    .reset_index()
+)
+
+risk_by_course["course_name_wrapped"] = active_by_course["course_name"].apply(
+    lambda x: "<br>".join(textwrap.wrap(x, width=15))
+)
+
+fig_risk = px.bar(
+    risk_by_course,
+    x="course_name_wrapped",
+    y="at_risk_learners",
+    title="At-Risk Learners by Course",
+    labels={
+        "course_name_wrapped": "Course",
+        "at_risk_learners": "At-Risk Learners"
+    }
+)
+
+st.plotly_chart(fig_risk, use_container_width=True)
 
 # =========================
-# AT-RISK TABLE
+# AVERAGE QUIZ SCORE BY WEEK
 # =========================
-st.subheader("At-Risk Learners")
 
-at_risk_df = filtered_learners[filtered_learners["at_risk"]].copy()
-at_risk_df = at_risk_df.sort_values(["course_name", "best_score", "progress_pct"], ascending=[True, True, True])
-
-if not at_risk_df.empty:
-    st.dataframe(
-        at_risk_df[[
-            "course_name", "fullname", "email", "weeks_completed", "total_weeks",
-            "progress_pct", "best_score", "status", "course_completed"
-        ]],
-        use_container_width=True,
-        hide_index=True,
+score_by_week = (
+    filtered_df
+    .replace({"avg_score": {0: np.nan}})
+    .groupby(["course_name", "week_number"])
+    .agg(
+        average_score=("avg_score", "mean")
     )
-else:
-    st.info("No at-risk learners found for the selected filters.")
+    .reset_index()
+)
+
+fig_score = px.line(
+    score_by_week,
+    x="week_number",
+    y="average_score",
+    color="course_name",
+    markers=True,
+    title="Average Quiz Score by Week",
+    labels={
+        "week_number": "Week",
+        "average_score": "Average Score (%)",
+        "course_name": "Course"
+    }
+)
+
+st.plotly_chart(fig_score, use_container_width=True)
+
+# =========================
+# ENGAGEMENT SCORE BY COURSE
+# =========================
+
+engagement_by_course = (
+    filtered_df
+    .groupby("course_name")
+    .agg(
+        avg_engagement_score=("engagement_score", "mean")
+    )
+    .reset_index()
+)
+
+engagement_by_course["avg_engagement_score"] *= 100
+
+engagement_by_course["course_name_wrapped"] = active_by_course["course_name"].apply(
+    lambda x: "<br>".join(textwrap.wrap(x, width=15)))
+
+
+fig_engagement = px.bar(
+    engagement_by_course,
+    x="course_name_wrapped",
+    y="avg_engagement_score",
+    title="Average Engagement Score by Course",
+    labels={
+        "course_name_wrapped": "Course",
+        "avg_engagement_score": "Engagement Score (%)"
+    }
+)
+
+st.plotly_chart(fig_engagement, use_container_width=True)
 
 # =========================
 # LEARNER TABLE
 # =========================
-st.subheader("Learner Summary")
 
-learner_display = filtered_learners.copy().sort_values(["course_name", "fullname"])
-if not learner_display.empty:
-    st.dataframe(
-        learner_display[[
-            "course_name", "fullname", "email", "weeks_completed", "total_weeks",
-            "progress_pct", "best_score", "status", "course_completed"
-        ]],
-        use_container_width=True,
-        hide_index=True,
-    )
-else:
-    st.info("No learner data available for the selected filters.")
+st.subheader("Learner-Level Progress Table")
 
-# =========================
-# DOWNLOADS
-# =========================
-st.subheader("Download Filtered Data")
+display_cols = [
+    "course_name", "fullname", "email", "week_number",
+    "completed", "total_quizzes", "attempted_quizzes",
+    "avg_score", "course_completed", "engagement_score",
+    "at_risk"
+]
+display_df = filtered_df[display_cols].sort_values(
+    ["course_name", "fullname", "week_number"]
+).reset_index(drop=True)
 
-csv_learners = filtered_learners.to_csv(index=False).encode("utf-8-sig")
-st.download_button(
-    label="Download learner summary CSV",
-    data=csv_learners,
-    file_name="filtered_learner_summary.csv",
-    mime="text/csv",
+display_df.insert(0, "S/N", display_df.index + 1)
+
+display_df["at_risk"] = display_df["at_risk"].map({
+    1: "Yes",
+    0: "No",
+    "Yes": "Yes",
+    "No": "No"
+})
+
+st.dataframe(
+    display_df,
+    use_container_width=True,
+    hide_index=True
 )
 
-csv_weeks = filtered_raw.to_csv(index=False).encode("utf-8-sig")
+
+# =========================
+# DOWNLOAD DATA
+# =========================
+
+csv = filtered_df.to_csv(index=False).encode("utf-8")
+
 st.download_button(
-    label="Download weekly progress CSV",
-    data=csv_weeks,
-    file_name="filtered_weekly_progress.csv",
-    mime="text/csv",
+    label="Download Filtered Data as CSV",
+    data=csv,
+    file_name="njfp_lms_dashboard_data.csv",
+    mime="text/csv"
 )
+
+# =========================
+# KPI DOCUMENTATION
+# =========================
+
+with st.expander("KPI Documentation"):
+    st.markdown("""
+## KPI Documentation
+
+### 1. Total Learners
+**Meaning:**  
+The total number of unique learners enrolled in the selected course(s).
+
+**Formula:**  
+`Total Learners = Count of unique user_id`
+
+---
+
+### 2. Active Learners
+**Meaning:**  
+Learners who showed activity in the LMS by either completing a week or attempting at least one quiz.
+
+**Formula:**  
+A learner is active if:
+
+`completed = 1 OR attempted_quizzes > 0`
+
+---
+
+### 3. At-Risk Learners
+**Meaning:**  
+Learners who have not completed the week and have not attempted any quiz. These learners may need follow-up or support.
+
+**Formula:**  
+A learner is at risk if:
+
+`completed = 0 AND attempted_quizzes = 0`
+
+---
+
+### 4. Course Completion Rate
+**Meaning:**  
+The percentage of learners who completed the course.
+
+**Formula:**  
+`Course Completion Rate = Completed Learners / Total Learners × 100`
+
+---
+
+### 5. Weekly Completion Rate
+**Meaning:**  
+Shows the percentage of learners who completed each week.
+
+**Formula:**  
+`Weekly Completion Rate = Users who completed the week / Total users in that week × 100`
+
+---
+
+### 6. Quiz Attempt Rate
+**Meaning:**  
+Shows the proportion of quizzes attempted by learners.
+
+**Formula:**  
+`Quiz Attempt Rate = Attempted Quizzes / Total Quizzes`
+
+---
+
+### 7. Average Quiz Score
+**Meaning:**  
+The average percentage score achieved by learners in quizzes.
+
+**Formula:**  
+`Average Quiz Score = Mean of avg_score`
+
+---
+
+### 8. Engagement Score
+**Meaning:**  
+A weighted score that combines weekly completion, quiz participation, and quiz performance.
+
+**Formula:**  
+
+`Engagement Score = (Completion × 40%) + (Quiz Attempt Activity × 30%) + (Quiz Score × 30%)`
+
+Where:
+- Completion = 1 if learner completed the week, otherwise 0
+- Quiz Attempt Activity = 1 if learner attempted any quiz, otherwise 0
+- Quiz Score = average quiz score divided by 100
+
+**Interpretation:**
+- 80% and above = Highly engaged
+- 50% to 79% = Moderately engaged
+- Below 50% = Low engagement / needs attention
+
+---
+
+### 9. Learning Effectiveness
+**Meaning:**  
+Shows whether learners are not just completing activities, but also performing well in quizzes.
+
+**Formula:**  
+`Learning Effectiveness = Completion × Average Quiz Score`
+
+A learner who completes a week but scores low may need academic support.  
+A learner who scores well but does not complete may need engagement support.
+""")
