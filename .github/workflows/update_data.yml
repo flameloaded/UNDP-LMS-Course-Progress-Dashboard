@@ -29,7 +29,10 @@ jobs:
         env:
           MOODLE_BASE_URL: ${{ secrets.MOODLE_BASE_URL }}
           MOODLE_TOKEN: ${{ secrets.MOODLE_TOKEN }}
-        run: python -u lms_pipeline.py
+        run: |
+            echo "Starting pipeline..."
+            python -u lms_pipeline.py
+            echo "Pipeline finished"
 
       - name: Commit updated dataset
         run: |
