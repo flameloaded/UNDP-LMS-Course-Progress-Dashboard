@@ -28,7 +28,7 @@ jobs:
       - name: Run data pipeline
         env:
           MOODLE_BASE_URL: ${{ secrets.MOODLE_BASE_URL }}
-          TOKEN: ${{ secrets.TOKEN }}
+          MOODLE_TOKEN: ${{ secrets.MOODLE_TOKEN }}
         run: python lms_pipeline.py
 
       - name: Commit updated dataset
