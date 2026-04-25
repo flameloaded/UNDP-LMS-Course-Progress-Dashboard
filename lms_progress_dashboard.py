@@ -49,7 +49,7 @@ elif data_status == "failed":
     st.error("❌ No data available. Latest and backup files failed.")
     st.stop()
 
-    
+
 
 # =========================
 # REQUIRED COLUMNS
@@ -60,6 +60,9 @@ required_cols = [
     "section_name", "week_name", "week_number", "cmid", "completed",
     "total_quizzes", "attempted_quizzes", "avg_score", "course_completed"
 ]
+
+if "completed" not in final_table.columns and "week_completed" in final_table.columns:
+    final_table["completed"] = final_table["week_completed"]
 
 missing_cols = [col for col in required_cols if col not in final_table.columns]
 
