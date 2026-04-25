@@ -306,29 +306,29 @@ def fetch_week_progress(users_df, week_completion_df):
 
 
 def build_dataset():
-    print("Fetching courses...")
+    print("Fetching courses...", flush=True)
     courses_df = fetch_courses()
 
-    print("Fetching users...")
+    print("Fetching users...", flush=True)
     users_df = fetch_users(courses_df)
 
-    print("Fetching quizzes...")
+    print("Fetching quizzes...", flush=True)
     quizzes_df = fetch_quizzes(courses_df)
 
-    print("Fetching quiz results...")
+    print("Fetching quiz results...", flush=True)
     quiz_df = fetch_quiz_results(quizzes_df, users_df)
 
-    print("Fetching course contents...")
+    print("Fetching course contents...", flush=True)
     contents_df = fetch_contents(courses_df)
 
     week_completion_df = contents_df[
         contents_df["module_type"] == "week_completion"
     ].copy()
 
-    print("Fetching course completion...")
+    print("Fetching course completion...", flush=True)
     course_completion_df = fetch_course_completion(users_df)
 
-    print("Fetching weekly progress...")
+    print("Fetching weekly progress...", flush=True)
     week_progress_df = fetch_week_progress(users_df, week_completion_df)
 
     quiz_week_summary = (
