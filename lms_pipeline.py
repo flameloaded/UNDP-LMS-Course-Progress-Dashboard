@@ -14,7 +14,9 @@ TOKEN = os.getenv("MOODLE_TOKEN")
 REQUEST_DELAY = 0.08
 TIMEOUT = 60
 
-EXCLUDE_COURSE_IDS = [2, 3, 4, 6, 12, 13, 16, 14, 23, 28]
+include_ids = [5,7,17,18,19,20,21,22]
+
+
 
 
 def call_moodle(wsfunction, **kwargs):
@@ -87,8 +89,14 @@ def fetch_courses():
         "shortname": "course_shortname"
     })
 
-    courses_df = courses_df[~courses_df["course_id"].isin(EXCLUDE_COURSE_IDS)].copy()
+    # Exclude unwanted courses
+    exclude_ids = [1, 2, 3, 4, 6, 12, 13, 14, 16, 23, 28]
+    courses_df = courses_df[~courses_df["course_id"].isin(exclude_ids)].copy()
 
+    # Step 2: Include ONLY what you want (whitelist)
+    include_ids = [5, 7, 17, 18, 19, 20, 21, 22]
+    courses_df = courses_df[courses_df["course_id"].isin(include_ids)].copy()
+    
     return courses_df
 
 
@@ -317,6 +325,9 @@ def build_dataset():
 
     print("Fetching quiz results...", flush=True)
     quiz_df = fetch_quiz_results(quizzes_df, users_df)
+
+    os.makedirs("data", exist_ok=True)
+    quiz_df.to_csv("data/quiz_results.csv", index=False)
 
     print("Fetching course contents...", flush=True)
     contents_df = fetch_contents(courses_df)

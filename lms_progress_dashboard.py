@@ -177,15 +177,19 @@ st.sidebar.title("Filters")
 
 course_options = ["All Courses"] + sorted(final_table["course_name"].dropna().unique())
 
-selected_course = st.sidebar.selectbox(
+selected_courses = st.sidebar.multiselect(
     "Select Course",
     options=course_options
 )
 
-if selected_course == "All Courses":
+# ✅ Handle filtering properly
+if not selected_courses or "All Courses" in selected_courses:
     filtered_df = final_table.copy()
 else:
-    filtered_df = final_table[final_table["course_name"] == selected_course].copy()
+    filtered_df = final_table[
+        final_table["course_name"].isin(selected_courses)
+    ].copy()
+    
 
 week_options = ["All Weeks"] + sorted(filtered_df["week_number"].dropna().unique())
 
@@ -545,6 +549,12 @@ display_df["week_at_risk"] = display_df["week_at_risk"].map({
     0: "No"
 })
 
+display_df["completed"] = display_df["completed"].map({
+    1: "✅ Yes",
+    0: "❌ No"
+})
+
+
 display_df = display_df.rename(columns={
     "course_name": "Course",
     "fullname": "Full Name",
@@ -558,6 +568,7 @@ display_df = display_df.rename(columns={
     "engagement_score": "Engagement Score",
     "week_at_risk": "At Risk"
 })
+
 
 st.dataframe(
     display_df,
